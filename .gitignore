@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment secrets
+.env
+
+# VS Code
+.vscode/
+wandb/
+*.pt
+
+# OS files
+.DS_Store
+
+lip_videos/
+lip_videos_npys/
