@@ -5,7 +5,9 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+import random
 from praatio import textgrid
+import torch.nn.functional as F
 
 
 # ============================================================
@@ -133,14 +135,49 @@ def normalize_lipcrops(x):
 # ============================================================
 
 class Lip2PhonemeDataset(Dataset):
-    def __init__(self, metadata_csv, phone_vocab_json):
+    def __init__(self, metadata_csv, phone_vocab_json, augment=False):
         self.df = pd.read_csv(metadata_csv)
+        self.augment = augment
 
         with open(phone_vocab_json, "r", encoding="utf-8") as f:
             self.phone_to_id = json.load(f)
 
     def __len__(self):
         return len(self.df)
+    
+    def augment_lipcrops(self, video, flip_p=0.5, max_shift=3):
+        """
+        video: [T, 1, 96, 96], normalized float tensor
+        """
+
+        # Horizontal flip
+        if random.random() < flip_p:
+            video = torch.flip(video, dims=[-1])
+
+        # Spatial translation / crop jitter: ±3 pixels
+        if max_shift > 0:
+            dx = random.randint(-max_shift, max_shift)
+            dy = random.randint(-max_shift, max_shift)
+
+            # Pad first, then crop back to 96x96
+            video = F.pad(
+                video,
+                pad=(max_shift, max_shift, max_shift, max_shift),
+                mode="constant",
+                value=0.0,
+            )
+
+            start_y = max_shift + dy
+            start_x = max_shift + dx
+
+            video = video[
+                :,
+                :,
+                start_y:start_y + 96,
+                start_x:start_x + 96,
+            ]
+
+        return video
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
@@ -158,6 +195,9 @@ class Lip2PhonemeDataset(Dataset):
 
         # Add channel dimension: [T, 1, 96, 96]
         video = video.unsqueeze(1)
+
+        if self.augment:
+            video = self.augment_lipcrops(video)
 
         # Load cleaned phone sequence
         phones = load_phone_sequence(textgrid_path)

@@ -2,11 +2,13 @@ import json
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+import csv
+import random
 
 import torch
 import torch.nn as nn
 import wandb
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 
 from model_packed import TinyLip2PhonemeCTC
 from dataset import Lip2PhonemeDataset, collate_lip_phone_batch
@@ -26,10 +28,12 @@ POOL_SIZE = 3                 # preserves 3x3 coarse spatial layout
 TEMPORAL_DIM = 192
 TEMPORAL_DROPOUT = 0.10
 RNN_DROPOUT = 0.20
+TSM_FOLD_DIV = 8
+BUCKET_SIZE = 64              # bigger bucket = more shuffle, smaller bucket = less padding
 
 LR = 1e-4
 WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 700
+NUM_EPOCHS = 500
 GRAD_CLIP = 5.0
 BLANK_ID = 0
 
@@ -44,7 +48,7 @@ SCHEDULER_FACTOR = 0.5
 SCHEDULER_THRESHOLD = 0.001   # absolute PER improvement required to reset patience
 MIN_LR = 1e-6
 
-CHECKPOINT_PATH = "best_lip2phoneme_temporal_cnn_bilstm_ctc.pt"
+CHECKPOINT_PATH = "best_lip2phoneme_tsm_bilstm_ctc.pt"
 debug_path = Path("bad_batches_debug.jsonl")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -52,6 +56,129 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 with open(PHONE_VOCAB_JSON, "r", encoding="utf-8") as f:
     phone_to_id = json.load(f)
 id_to_phone = {v: k for k, v in phone_to_id.items()}
+
+
+
+
+# ----------------------------
+# Length-bucketed batching
+# ----------------------------
+class LengthBucketBatchSampler(Sampler[List[int]]):
+    """
+    Groups examples with similar frame lengths into the same batch.
+
+    This is especially useful for the TSM model because padded frames are present
+    in the [B, T, C, H, W] tensor that enters CNN BatchNorm. Bucketing reduces
+    the number of padded zero frames inside each batch.
+    """
+
+    def __init__(
+        self,
+        lengths: Sequence[int],
+        batch_size: int,
+        bucket_size: int = 64,
+        shuffle: bool = True,
+        drop_last: bool = False,
+    ):
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if bucket_size < batch_size:
+            raise ValueError("bucket_size should be >= batch_size")
+
+        self.lengths = [int(length) for length in lengths]
+        self.batch_size = batch_size
+        self.bucket_size = bucket_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+
+    def __iter__(self):
+        indices = list(range(len(self.lengths)))
+
+        if self.shuffle:
+            random.shuffle(indices)
+
+        buckets = [
+            indices[i : i + self.bucket_size]
+            for i in range(0, len(indices), self.bucket_size)
+        ]
+
+        batches = []
+        for bucket in buckets:
+            bucket.sort(key=lambda idx: self.lengths[idx])
+
+            for i in range(0, len(bucket), self.batch_size):
+                batch = bucket[i : i + self.batch_size]
+                if len(batch) == self.batch_size or not self.drop_last:
+                    batches.append(batch)
+
+        if self.shuffle:
+            random.shuffle(batches)
+
+        for batch in batches:
+            yield batch
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return len(self.lengths) // self.batch_size
+        return (len(self.lengths) + self.batch_size - 1) // self.batch_size
+
+
+def infer_lengths_from_csv(metadata_csv: str) -> Optional[List[int]]:
+    """
+    Prefer cheap length extraction from metadata CSV.
+
+    Supported cases:
+      1. input_len / num_frames / n_frames / frames column exists
+      2. duration and fps columns exist
+
+    Returns None if the CSV does not contain enough information.
+    """
+    with open(metadata_csv, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if not rows:
+        return []
+
+    frame_columns = ["input_len", "num_frames", "n_frames", "frames", "T"]
+    for column in frame_columns:
+        if column in rows[0] and rows[0][column] not in (None, ""):
+            return [int(round(float(row[column]))) for row in rows]
+
+    if "duration" in rows[0] and "fps" in rows[0]:
+        return [
+            max(1, int(round(float(row["duration"]) * float(row["fps"]))))
+            for row in rows
+        ]
+
+    return None
+
+
+def get_dataset_lengths(dataset: Lip2PhonemeDataset, metadata_csv: str) -> List[int]:
+    """
+    Get frame lengths for bucketed batching.
+
+    First tries metadata CSV to avoid loading every .npy. If unavailable, falls
+    back to dataset[i]["video"].shape[0].
+    """
+    lengths = infer_lengths_from_csv(metadata_csv)
+    if lengths is not None:
+        if len(lengths) != len(dataset):
+            raise ValueError(
+                f"Length count mismatch: CSV has {len(lengths)}, dataset has {len(dataset)}"
+            )
+        return lengths
+
+    loaded_lengths = []
+    for i in range(len(dataset)):
+        sample = dataset[i]
+        if "input_len" in sample:
+            loaded_lengths.append(int(sample["input_len"]))
+        elif "input_lens" in sample:
+            loaded_lengths.append(int(sample["input_lens"]))
+        else:
+            loaded_lengths.append(int(sample["video"].shape[0]))
+    return loaded_lengths
 
 
 # ----------------------------
@@ -574,24 +701,42 @@ def validate(
 train_ds = Lip2PhonemeDataset(
     metadata_csv=TRAIN_CSV,
     phone_vocab_json=PHONE_VOCAB_JSON,
+    augment=True
 )
 val_ds = Lip2PhonemeDataset(
     metadata_csv=VAL_CSV,
     phone_vocab_json=PHONE_VOCAB_JSON,
+    augment=False
+)
+
+train_lengths = get_dataset_lengths(train_ds, TRAIN_CSV)
+val_lengths = get_dataset_lengths(val_ds, VAL_CSV)
+
+train_batch_sampler = LengthBucketBatchSampler(
+    lengths=train_lengths,
+    batch_size=BATCH_SIZE,
+    bucket_size=BUCKET_SIZE,
+    shuffle=True,
+    drop_last=False,
+)
+val_batch_sampler = LengthBucketBatchSampler(
+    lengths=val_lengths,
+    batch_size=BATCH_SIZE,
+    bucket_size=BUCKET_SIZE,
+    shuffle=False,
+    drop_last=False,
 )
 
 train_loader = DataLoader(
     train_ds,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
+    batch_sampler=train_batch_sampler,
     num_workers=NUM_WORKERS,
     collate_fn=collate_lip_phone_batch,
     pin_memory=True,
 )
 val_loader = DataLoader(
     val_ds,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
+    batch_sampler=val_batch_sampler,
     num_workers=NUM_WORKERS,
     collate_fn=collate_lip_phone_batch,
     pin_memory=True,
@@ -604,6 +749,7 @@ model = TinyLip2PhonemeCTC(
     temporal_dim=TEMPORAL_DIM,
     temporal_dropout=TEMPORAL_DROPOUT,
     rnn_dropout=RNN_DROPOUT,
+    tsm_fold_div=TSM_FOLD_DIV,
 ).to(device)
 
 total_params, trainable_params = count_parameters(model)
@@ -627,7 +773,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 
 wandb.init(
     project="lip-to-phoneme-ctc",
-    name="temporal-cnn-conv1d-bilstm-ctc-beam",
+    name="tsm-cnn-bilstm-ctc-beam",
     config={
         "model": model.__class__.__name__,
         "batch_size": BATCH_SIZE,
@@ -636,6 +782,8 @@ wandb.init(
         "temporal_dim": TEMPORAL_DIM,
         "temporal_dropout": TEMPORAL_DROPOUT,
         "rnn_dropout": RNN_DROPOUT,
+        "tsm_fold_div": TSM_FOLD_DIV,
+        "bucket_size": BUCKET_SIZE,
         "lr": LR,
         "weight_decay": WEIGHT_DECAY,
         "num_epochs": NUM_EPOCHS,
