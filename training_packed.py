@@ -773,7 +773,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 
 wandb.init(
     project="lip-to-phoneme-ctc",
-    name="tsm-cnn-bilstm-ctc-beam",
+    name="gn-residual-tsm-cnn-bilstm-ctc-beam",
     config={
         "model": model.__class__.__name__,
         "batch_size": BATCH_SIZE,
@@ -800,6 +800,8 @@ wandb.init(
         "trainable_params": trainable_params,
         "train_samples": len(train_ds),
         "val_samples": len(val_ds),
+        "normalization": "GroupNorm(4,8,8)",
+        "tsm_mode": "residual_blend_0.5",
     },
 )
 wandb.watch(model, log="gradients", log_freq=100)

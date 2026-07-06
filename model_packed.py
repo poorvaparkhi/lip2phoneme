@@ -5,14 +5,10 @@ import torch.nn.functional as F
 
 class TemporalShift(nn.Module):
     """
-    Temporal Shift Module for tensors shaped [B, T, C, H, W].
+    Temporal Shift Module for [B, T, C, H, W].
 
-    Bidirectional/offline TSM:
-        - 1/fold_div channels take information from the next frame
-        - 1/fold_div channels take information from the previous frame
-        - remaining channels stay at the current frame
-
-    This adds temporal mixing without extra learnable parameters.
+    Produces a temporally shifted feature tensor. The caller blends this
+    with the original features using a residual connection.
     """
 
     def __init__(self, fold_div: int = 8):
@@ -25,48 +21,49 @@ class TemporalShift(nn.Module):
         """
         Args:
             x:          [B, T, C, H, W]
-            valid_mask: [B, T], True for real frames, False for padding
+            valid_mask: [B, T], True for real frames and False for padding.
+
+        Returns:
+            shifted: [B, T, C, H, W]
         """
         if x.ndim != 5:
             raise ValueError(f"Expected x [B,T,C,H,W], got {tuple(x.shape)}")
 
-        B, T, C, H, W = x.shape
-        fold = C // self.fold_div
+        _, T, C, _, _ = x.shape
+        mask = valid_mask[:, :, None, None, None].to(dtype=x.dtype)
 
-        if fold == 0 or T == 1:
-            return x * valid_mask[:, :, None, None, None].to(x.dtype)
+        if T == 1:
+            return x * mask
+
+        fold = C // self.fold_div
+        if fold == 0:
+            return x * mask
 
         out = torch.zeros_like(x)
 
-        # Channels [0:fold] receive information from the next frame.
-        # At timestep t, this stores x[t+1]. Useful for offline/bidirectional models.
+        # At timestep t, first channel group receives features from t + 1.
         out[:, :-1, :fold] = x[:, 1:, :fold]
 
-        # Channels [fold:2*fold] receive information from the previous frame.
-        # At timestep t, this stores x[t-1].
+        # At timestep t, second channel group receives features from t - 1.
         out[:, 1:, fold:2 * fold] = x[:, :-1, fold:2 * fold]
 
-        # Remaining channels stay at the current timestep.
+        # Remaining channels preserve same-frame features in shifted branch.
         out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
 
-        # Keep padded timesteps exactly zero.
-        out = out * valid_mask[:, :, None, None, None].to(out.dtype)
-        return out
+        return out * mask
 
 
 class TinyLip2PhonemeCTC(nn.Module):
     """
-    Visual front end with TSM-based local temporal context:
+    CNN + residual TSM + packed BiLSTM + CTC.
 
-        padded video frames
-            -> CNN block 1 -> TSM
-            -> CNN block 2 -> TSM
-            -> CNN block 3 -> TSM + 3x3 adaptive pooling
-            -> per-frame projection
-            -> packed 2-layer BiLSTM
-            -> CTC logits
+    Changes from the BatchNorm/non-residual TSM baseline:
+      - GroupNorm replaces BatchNorm.
+      - Each TSM output is blended with original CNN features:
+            x = 0.5 * (x + shifted)
+      - Padded timesteps remain zero throughout temporal mixing.
 
-    TSM keeps the sequence length unchanged, so CTC output_lens == input_lens.
+    TSM does not change sequence length, so output_lens == input_lens.
     """
 
     def __init__(
@@ -78,33 +75,39 @@ class TinyLip2PhonemeCTC(nn.Module):
         temporal_dropout: float = 0.10,
         rnn_dropout: float = 0.20,
         tsm_fold_div: int = 8,
+        tsm_residual_alpha: float = 0.5,
     ):
         super().__init__()
 
         if pooled_size < 1:
             raise ValueError(f"pooled_size must be >= 1, got {pooled_size}")
+        if not 0.0 <= tsm_residual_alpha <= 1.0:
+            raise ValueError(
+                f"tsm_residual_alpha must be in [0, 1], got {tsm_residual_alpha}"
+            )
 
         self.pooled_size = pooled_size
         self.temporal_dim = temporal_dim
+        self.tsm_residual_alpha = tsm_residual_alpha
         self.tsm = TemporalShift(fold_div=tsm_fold_div)
 
         self.block1 = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(16),
+            nn.GroupNorm(num_groups=4, num_channels=16),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
         )
 
         self.block2 = nn.Sequential(
             nn.Conv2d(16, 32, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(32),
+            nn.GroupNorm(num_groups=8, num_channels=32),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
         )
 
         self.block3 = nn.Sequential(
             nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(num_groups=8, num_channels=64),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d((pooled_size, pooled_size)),
         )
@@ -128,7 +131,7 @@ class TinyLip2PhonemeCTC(nn.Module):
 
         self.classifier = nn.Linear(2 * hidden_dim, num_classes)
 
-    def _run_cnn_block_with_tsm(
+    def _run_cnn_block_with_residual_tsm(
         self,
         x: torch.Tensor,
         block: nn.Module,
@@ -137,30 +140,39 @@ class TinyLip2PhonemeCTC(nn.Module):
         """
         Args:
             x:          [B, T, C, H, W]
-            block:      2D CNN block
+            block:      framewise 2D CNN block
             valid_mask: [B, T]
 
         Returns:
             [B, T, C_out, H_out, W_out]
         """
         B, T, C, H, W = x.shape
+        mask = valid_mask[:, :, None, None, None].to(dtype=x.dtype)
 
-        # 2D CNN block sees frames as independent images.
+        # Apply the 2D CNN independently to each frame.
         x = x.reshape(B * T, C, H, W)
         x = block(x)
 
         C2, H2, W2 = x.shape[1], x.shape[2], x.shape[3]
         x = x.reshape(B, T, C2, H2, W2)
 
-        # TSM mixes neighboring timesteps after this CNN block.
-        x = self.tsm(x, valid_mask)
-        return x
+        # Ensure padded frame outputs are zero before temporal mixing.
+        x = x * mask
+
+        shifted = self.tsm(x, valid_mask)
+
+        # Residual temporal blend:
+        # alpha=0.5 means equal original and shifted contributions.
+        alpha = self.tsm_residual_alpha
+        x = (1.0 - alpha) * x + alpha * shifted
+
+        return x * mask
 
     def forward(self, x: torch.Tensor, input_lens: torch.Tensor):
         """
         Args:
-            x:          [B, T, 1, 96, 96], padded on the right in time.
-            input_lens: [B], number of real frames in each utterance.
+            x:          [B, T, 1, 96, 96], right-padded in time.
+            input_lens: [B], valid frame count for each sequence.
 
         Returns:
             log_probs:   [T, B, num_classes] for nn.CTCLoss.
@@ -168,10 +180,10 @@ class TinyLip2PhonemeCTC(nn.Module):
         """
         if x.ndim != 5:
             raise ValueError(
-                f"Expected x with 5 dimensions [B,T,C,H,W], got {tuple(x.shape)}"
+                f"Expected x with shape [B,T,C,H,W], got {tuple(x.shape)}"
             )
 
-        B, T, C, H, W = x.shape
+        B, T, _, _, _ = x.shape
         input_lens = input_lens.to(device=x.device, dtype=torch.long)
 
         if input_lens.ndim != 1 or input_lens.numel() != B:
@@ -180,26 +192,26 @@ class TinyLip2PhonemeCTC(nn.Module):
             )
         if (input_lens < 1).any() or (input_lens > T).any():
             raise ValueError(
-                f"input_lens must be in [1, {T}], got {input_lens.detach().cpu().tolist()}"
+                f"input_lens must be in [1, {T}], "
+                f"got {input_lens.detach().cpu().tolist()}"
             )
 
         time_index = torch.arange(T, device=x.device).unsqueeze(0)
-        valid_mask = time_index < input_lens.unsqueeze(1)  # [B, T]
+        valid_mask = time_index < input_lens.unsqueeze(1)
 
-        # Zero padded frames before CNN. Length-bucketed batches reduce how many
-        # padded frames enter BatchNorm.
-        x = x * valid_mask[:, :, None, None, None].to(x.dtype)
+        # Zero padded video frames.
+        x = x * valid_mask[:, :, None, None, None].to(dtype=x.dtype)
 
-        x = self._run_cnn_block_with_tsm(x, self.block1, valid_mask)
-        x = self._run_cnn_block_with_tsm(x, self.block2, valid_mask)
-        x = self._run_cnn_block_with_tsm(x, self.block3, valid_mask)
+        x = self._run_cnn_block_with_residual_tsm(x, self.block1, valid_mask)
+        x = self._run_cnn_block_with_residual_tsm(x, self.block2, valid_mask)
+        x = self._run_cnn_block_with_residual_tsm(x, self.block3, valid_mask)
 
-        # [B, T, 64, P, P] -> [B, T, 64*P*P]
+        # [B, T, 64, P, P] -> [B, T, 64 * P * P]
         seq = x.flatten(start_dim=2)
 
-        # [B, T, 64*P*P] -> [B, T, temporal_dim]
+        # Per-frame projection.
         seq = self.frame_proj(seq)
-        seq = seq * valid_mask.unsqueeze(-1).to(seq.dtype)
+        seq = seq * valid_mask.unsqueeze(-1).to(dtype=seq.dtype)
 
         packed = nn.utils.rnn.pack_padded_sequence(
             seq,

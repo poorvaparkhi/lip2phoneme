@@ -1,0 +1,227 @@
+{
+  "samples": 441,
+  "decoder": {
+    "type": "prefix_beam_shallow_fusion",
+    "beam_width": 25,
+    "token_prune": 20,
+    "blank_id": 0,
+    "phoneme_lm": "/media/newhddd/poorva/lip2phoneme/phoneme_bigram_lm.pt",
+    "lm_order": 2,
+    "lm_add_k": 0.1,
+    "lm_weight": 0.05,
+    "insertion_penalty": 0.0,
+    "lm_score_eos": true
+  },
+  "corpus_metrics": {
+    "reference_phonemes": 33710,
+    "predicted_phonemes": 31880,
+    "per": 0.25597745476119843,
+    "sub_rate": 0.14319193117769208,
+    "del_rate": 0.08353604271729458,
+    "ins_rate": 0.029249480866211805,
+    "hyp_ref_len_ratio": 0.9457134381489173
+  },
+  "checkpoint": "/media/newhddd/poorva/lip2phoneme/best_lip2phoneme_temporal_cnn_bilstm_ctc.pt",
+  "checkpoint_epoch": 488,
+  "checkpoint_val_per": 0.2599508016952669,
+  "metadata_csv": "val.csv",
+  "grid_search": {
+    "lm_weights_requested": [
+      0.0,
+      0.05,
+      0.1,
+      0.2,
+      0.3
+    ],
+    "insertion_penalties_requested": [
+      0.0,
+      0.025,
+      0.05
+    ],
+    "num_settings": 15,
+    "selection_metric": "lowest_per_then_length_balance",
+    "best_rank": 1,
+    "all_results_sorted_by_per": [
+      {
+        "lm_weight": 0.05,
+        "insertion_penalty": 0.0,
+        "per": 0.25597745476119843,
+        "sub_rate": 0.14319193117769208,
+        "del_rate": 0.08353604271729458,
+        "ins_rate": 0.029249480866211805,
+        "hyp_ref_len_ratio": 0.9457134381489173,
+        "predicted_phonemes": 31880,
+        "reference_phonemes": 33710,
+        "rank": 1
+      },
+      {
+        "lm_weight": 0.1,
+        "insertion_penalty": 0.025,
+        "per": 0.25606644912488874,
+        "sub_rate": 0.14010679323642836,
+        "del_rate": 0.08964698902402848,
+        "ins_rate": 0.02631266686443192,
+        "hyp_ref_len_ratio": 0.9366656778404034,
+        "predicted_phonemes": 31575,
+        "reference_phonemes": 33710,
+        "rank": 2
+      },
+      {
+        "lm_weight": 0.1,
+        "insertion_penalty": 0.05,
+        "per": 0.25606644912488874,
+        "sub_rate": 0.13983981014535746,
+        "del_rate": 0.09035894393355087,
+        "ins_rate": 0.02586769504598042,
+        "hyp_ref_len_ratio": 0.9355087511124296,
+        "predicted_phonemes": 31536,
+        "reference_phonemes": 33710,
+        "rank": 3
+      },
+      {
+        "lm_weight": 0.05,
+        "insertion_penalty": 0.025,
+        "per": 0.25618510827647584,
+        "sub_rate": 0.14292494808662118,
+        "del_rate": 0.08445565114209433,
+        "ins_rate": 0.02880450904776031,
+        "hyp_ref_len_ratio": 0.944348857905666,
+        "predicted_phonemes": 31834,
+        "reference_phonemes": 33710,
+        "rank": 4
+      },
+      {
+        "lm_weight": 0.1,
+        "insertion_penalty": 0.0,
+        "per": 0.25627410264016615,
+        "sub_rate": 0.14055176505487985,
+        "del_rate": 0.08893503411450608,
+        "ins_rate": 0.026787303470780184,
+        "hyp_ref_len_ratio": 0.9378522693562741,
+        "predicted_phonemes": 31615,
+        "reference_phonemes": 33710,
+        "rank": 5
+      },
+      {
+        "lm_weight": 0.05,
+        "insertion_penalty": 0.05,
+        "per": 0.25642242657965,
+        "sub_rate": 0.1425393058439632,
+        "del_rate": 0.08549391871848117,
+        "ins_rate": 0.028389202017205576,
+        "hyp_ref_len_ratio": 0.9428952832987244,
+        "predicted_phonemes": 31785,
+        "reference_phonemes": 33710,
+        "rank": 6
+      },
+      {
+        "lm_weight": 0.2,
+        "insertion_penalty": 0.0,
+        "per": 0.2568377336102047,
+        "sub_rate": 0.13381785820231384,
+        "del_rate": 0.10074161969741917,
+        "ins_rate": 0.02227825571047167,
+        "hyp_ref_len_ratio": 0.9215366360130525,
+        "predicted_phonemes": 31065,
+        "reference_phonemes": 33710,
+        "rank": 7
+      },
+      {
+        "lm_weight": 0.2,
+        "insertion_penalty": 0.05,
+        "per": 0.25713438148917234,
+        "sub_rate": 0.13269059626223673,
+        "del_rate": 0.10308513794126371,
+        "ins_rate": 0.021358647285671908,
+        "hyp_ref_len_ratio": 0.9182735093444082,
+        "predicted_phonemes": 30955,
+        "reference_phonemes": 33710,
+        "rank": 8
+      },
+      {
+        "lm_weight": 0.0,
+        "insertion_penalty": 0.0,
+        "per": 0.2571640462770691,
+        "sub_rate": 0.14562444378522693,
+        "del_rate": 0.0783743696232572,
+        "ins_rate": 0.03316523286858499,
+        "hyp_ref_len_ratio": 0.9547908632453278,
+        "predicted_phonemes": 32186,
+        "reference_phonemes": 33710,
+        "rank": 9
+      },
+      {
+        "lm_weight": 0.2,
+        "insertion_penalty": 0.025,
+        "per": 0.2571937110649659,
+        "sub_rate": 0.13325422723227529,
+        "del_rate": 0.1019578760011866,
+        "ins_rate": 0.021981607831504005,
+        "hyp_ref_len_ratio": 0.9200237318303174,
+        "predicted_phonemes": 31014,
+        "reference_phonemes": 33710,
+        "rank": 10
+      },
+      {
+        "lm_weight": 0.0,
+        "insertion_penalty": 0.025,
+        "per": 0.25743102936814,
+        "sub_rate": 0.1455651142094334,
+        "del_rate": 0.07926431326016019,
+        "ins_rate": 0.032601601898546426,
+        "hyp_ref_len_ratio": 0.9533372886383862,
+        "predicted_phonemes": 32137,
+        "reference_phonemes": 33710,
+        "rank": 11
+      },
+      {
+        "lm_weight": 0.0,
+        "insertion_penalty": 0.05,
+        "per": 0.25778700682290123,
+        "sub_rate": 0.14532779590625927,
+        "del_rate": 0.08042123998813408,
+        "ins_rate": 0.03203797092850786,
+        "hyp_ref_len_ratio": 0.9516167309403738,
+        "predicted_phonemes": 32079,
+        "reference_phonemes": 33710,
+        "rank": 12
+      },
+      {
+        "lm_weight": 0.3,
+        "insertion_penalty": 0.0,
+        "per": 0.2604568377336102,
+        "sub_rate": 0.12993177098783742,
+        "del_rate": 0.11150993770394542,
+        "ins_rate": 0.01901512904182735,
+        "hyp_ref_len_ratio": 0.907505191337882,
+        "predicted_phonemes": 30592,
+        "reference_phonemes": 33710,
+        "rank": 13
+      },
+      {
+        "lm_weight": 0.3,
+        "insertion_penalty": 0.025,
+        "per": 0.2607534856125779,
+        "sub_rate": 0.12957579353307624,
+        "del_rate": 0.11257787006822902,
+        "ins_rate": 0.01859982201127262,
+        "hyp_ref_len_ratio": 0.9060219519430436,
+        "predicted_phonemes": 30542,
+        "reference_phonemes": 33710,
+        "rank": 14
+      },
+      {
+        "lm_weight": 0.3,
+        "insertion_penalty": 0.05,
+        "per": 0.2612577870068229,
+        "sub_rate": 0.12910115692672797,
+        "del_rate": 0.11403144467517057,
+        "ins_rate": 0.018125185404924356,
+        "hyp_ref_len_ratio": 0.9040937407297538,
+        "predicted_phonemes": 30477,
+        "reference_phonemes": 33710,
+        "rank": 15
+      }
+    ]
+  }
+}

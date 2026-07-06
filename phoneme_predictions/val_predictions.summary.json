@@ -1,0 +1,22 @@
+{
+  "samples": 441,
+  "decoder": {
+    "type": "prefix_beam_no_lm",
+    "beam_width": 10,
+    "token_prune": 15,
+    "blank_id": 0
+  },
+  "corpus_metrics": {
+    "reference_phonemes": 33710,
+    "predicted_phonemes": 32204,
+    "per": 0.2573716997923465,
+    "sub_rate": 0.1460100860278849,
+    "del_rate": 0.078018392168496,
+    "ins_rate": 0.03334322159596559,
+    "hyp_ref_len_ratio": 0.9553248294274695
+  },
+  "checkpoint": "/media/newhddd/poorva/lip2phoneme/best_lip2phoneme_temporal_cnn_bilstm_ctc.pt",
+  "checkpoint_epoch": 488,
+  "checkpoint_val_per": 0.2599508016952669,
+  "metadata_csv": "/media/newhddd/poorva/lip2phoneme/val.csv"
+}
